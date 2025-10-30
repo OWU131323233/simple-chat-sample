@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>リアルタイム傾きゲーム（2D）</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.1.9/p5.min.js"></script>
+  <script src="https://cdn.socket.io/4.5.1/socket.io.min.js"></script>
+  <style>
+    body { margin:0; overflow:hidden; font-family:sans-serif; }
+    #score { position:absolute; top:10px; left:10px; color:white; font-size:20px; }
+    #connect { position:absolute; top:50px; left:10px; z-index:10; }
+  </style>
+</head>
+<body>
+  <div id="score">スコア: 0</div>
+  <button id="connect">ルームに入る</button>
+
+  <script>
+    const socket = io();
+
+    // --- センサーデータ ---
+    let beta = 0;   // 上下傾き
+    let gamma = 0;  // 左右傾き
+
+    // --- プレイヤー ---
+    let player = {x: 50, y: 50, r: 25};
+
+    // --- ゲーム設定 ---
+    let obstacles = [
+      {x:200, y:150, w:100, h:20},
+      {x:400, y:300, w:150, h:20},
+      {x:600, y:450, w:100, h:20}
+    ];
+
+    let goal = {x:750, y:550, r:30};
+    let score = 0;
+    const speed = 0.2;
+
+    // --- ルーム参加 ---
+    document.querySelector("#connect").addEventListener("click", () => {
+      socket.emit("join", "game");
+      document.querySelector("#connect").remove();
+    });
+
+    // --- センサーデータ受信 ---
+    socket.on("sensor", (data) => {
+      beta = parseFloat(data.b) || 0;
+      gamma = parseFloat(data.g) || 0;
+    });
+
+    function setup() {
+      createCanvas(800, 600);
+    }
+
+    function draw() {
+      background(50, 150, 200);
+
+      // --- プレイヤー移動 ---
+      player.x += gamma * speed;
+      player.y += beta * speed;
+
+      // 画面端制限
+      player.x = constrain(player.x, player.r, width - player.r);
+      player.y = constrain(player.y, player.r, height - player.r);
+
+      // --- 障害物描画 ---
+      fill(100);
+      obstacles.forEach(obs => {
+        rect(obs.x, obs.y, obs.w, obs.h);
+
+        // 衝突判定
+        if (player.x + player.r > obs.x && player.x - player.r < obs.x + obs.w &&
+            player.y + player.r > obs.y && player.y - player.r < obs.y + obs.h) {
+          // 衝突したら少し戻す
+          player.x -= gamma * speed * 2;
+          player.y -= beta * speed * 2;
+        }
+      });
+
+      // --- ゴール描画 ---
+      fill(255, 215, 0);
+      ellipse(goal.x, goal.y, goal.r*2);
+
+      // ゴール判定
+      let d = dist(player.x, player.y, goal.x, goal.y);
+      if (d < player.r + goal.r) {
+        score += 1;
+        document.querySelector("#score").innerText = "スコア: " + score;
+        // プレイヤーを初期位置に戻す
+        player.x = 50;
+        player.y = 50;
+      }
+
+      // --- プレイヤー描画 ---
+      fill(255, 100, 100);
+      noStroke();
+      ellipse(player.x, player.y, player.r*2);
+    }
+  </script>
+</body>
+</html>
