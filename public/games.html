@@ -2,211 +2,186 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>ゆらゆらスイートゲーム</title>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.1.9/p5.min.js"></script>
-  <script src="https://cdn.socket.io/4.5.1/socket.io.min.js"></script>
+  <title>かわいい2D Tower Game（ランダム生成版）</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.5.0/p5.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.1/socket.io.min.js"></script>
   <style>
-    body {
-      margin: 0;
-      overflow: hidden;
-      font-family: "Hiragino Maru Gothic ProN", "Yu Gothic", sans-serif;
-      background: linear-gradient(180deg, #fbe9e7, #f8bbd0);
-    }
+    body { margin: 0; overflow: hidden; font-family: 'Comic Sans MS', sans-serif; }
     #ui {
-      position: absolute;
-      top: 10px;
-      left: 10px;
-      color: #6a1b9a;
-      font-size: 20px;
-      font-weight: bold;
+      position: fixed; top: 10px; left: 10px;
+      display: flex; flex-direction: column; gap: 10px;
+      z-index: 10;
     }
     button {
-      position: absolute;
-      left: 10px;
-      z-index: 10;
-      background: #f48fb1;
-      color: white;
-      border: none;
-      padding: 8px 16px;
-      border-radius: 20px;
-      cursor: pointer;
+      padding: 10px 18px;
       font-size: 16px;
-      transition: 0.2s;
+      cursor: pointer;
+      border-radius: 14px;
+      border: none;
+      background: #ffd3d3;
+      color: #333;
+      box-shadow: 2px 2px 6px rgba(0,0,0,0.2);
+      transition: transform 0.1s, background 0.2s;
     }
-    button:hover { background: #ec407a; }
-    #connect { top: 60px; }
-    #start { top: 110px; display: none; } /* ← 最初は非表示 */
+    button:active {
+      transform: scale(0.95);
+      background: #ff9999;
+    }
+    button:disabled {
+      background: #cc9999;
+      cursor: not-allowed;
+      box-shadow: none;
+    }
   </style>
 </head>
 <body>
-  <div id="ui">スコア: 0　｜　残り: 60 秒</div>
-  <button id="connect">ルームに入る</button>
-  <button id="start">スタート</button> <!-- 新しいスタートボタン -->
+<div id="ui">
+  <button id="joinBtn">ルームに入る</button>
+  <button id="startBtn" disabled>スタート</button>
+</div>
 
-  <script>
-    const socket = io();
+<script>
+let socket = io.connect();
+let joined = false;
+let started = false;
 
-    // --- センサーデータ ---
-    let beta = 0;   // 上下傾き
-    let gamma = 0;  // 左右傾き
+let tiltX = 0; // 左右傾きのみ使用
 
-    // --- プレイヤー ---
-    let player = {x: 50, y: 50, r: 25};
+document.getElementById("joinBtn").onclick = () => {
+  socket.emit("join", "game");
+  joined = true;
+  document.getElementById("joinBtn").disabled = true;
+  document.getElementById("startBtn").disabled = false;
+};
 
-    // --- ゲーム設定 ---
-    let obstacles = [
-      {x:200, y:150, w:100, h:20},
-      {x:400, y:300, w:150, h:20},
-      {x:600, y:450, w:100, h:20}
-    ];
+document.getElementById("startBtn").onclick = () => {
+  started = true;
+  tiltX = 0;
+  document.getElementById("startBtn").disabled = true;
+};
 
-    let goal = {x:750, y:550, r:30};
-    let hearts = []; // アイテム（ハート）
-    let score = 0;
-    const speed = 0.25;
-    let timeLeft = 60;
-    let gameActive = false; // ← スタート前は停止
-    let timer = null;
+socket.on("sensor", (data) => {
+  if (started) {
+    tiltX = parseFloat(data.g); // 横移動だけ反映
+  } else {
+    tiltX = 0;
+  }
+});
 
-    // --- ルーム参加 ---
-    document.querySelector("#connect").addEventListener("click", () => {
-      socket.emit("join", "game");
-      document.querySelector("#connect").remove();
-      document.querySelector("#start").style.display = "block"; // スタートボタンを表示
-    });
+let blocks = [];
+let currentBlock;
+let blockSize = { w: 120, h: 25 };
+let baseFallSpeed = 5; // 基本落下速度
+let score = 0;
+let gameOverMessage = "";
+let highScore = localStorage.getItem("highScore") || 0;
 
-    // --- スタートボタン ---
-    document.querySelector("#start").addEventListener("click", () => {
-      if (gameActive) return;
-      gameActive = true;
-      score = 0;
-      timeLeft = 60;
-      player.x = 50;
-      player.y = 50;
-      spawnHearts();
-      updateUI();
-      document.querySelector("#start").style.display = "none"; // スタートボタンを非表示
-      startTimer(); // ← タイマー開始
-    });
+const initialBlockColor = [120, 180, 255];
+const fallingBlockColor = [255, 150, 120];
 
-    // --- センサーデータ受信 ---
-    socket.on("sensor", (data) => {
-      beta = parseFloat(data.b) || 0;
-      gamma = parseFloat(data.g) || 0;
-    });
+function setup() {
+  createCanvas(window.innerWidth, window.innerHeight);
+  resetGame();
+}
 
-    function setup() {
-      createCanvas(800, 600);
-    }
+function resetGame() {
+  tiltX = 0;
+  blocks = [];
+  blocks.push({ x: width / 2, y: height - blockSize.h, w: blockSize.w * 1.5, color: initialBlockColor });
+  score = 0;
+  baseFallSpeed = 5;
+  gameOverMessage = "";
+  newBlock();
+}
 
-    function draw() {
-      background(255, 240, 245);
+function newBlock() {
+  let randomWidth = random(60, 200);
+  let randomX = random(randomWidth/2, width - randomWidth/2); // 画面外生成防止
+  currentBlock = { x: randomX, y: -100, w: randomWidth, color: fallingBlockColor };
+  baseFallSpeed += 1; // ブロックが落ちるごとに速度アップ
+}
 
-      if (!gameActive) {
-        // スタート前の画面
-        fill(150, 100);
-        textAlign(CENTER, CENTER);
-        textSize(24);
-        text("「スタート」を押してね 💕", width/2, height/2);
-        return;
-      }
+function draw() {
+  // 背景グラデーション
+  for(let i=0;i<height;i++){
+    let inter = map(i,0,height,0,1);
+    let c = lerpColor(color('#FFF0F5'), color('#FFE4E1'), inter);
+    stroke(c);
+    line(0,i,width,i);
+  }
 
-      // --- プレイヤー移動 ---
-      player.x += gamma * speed;
-      player.y += beta * speed;
+  noStroke();
+  for (let b of blocks) {
+    fill(b.color);
+    rect(b.x - b.w/2, b.y - blockSize.h, b.w, blockSize.h);
+  }
 
-      // 画面端制限
-      player.x = constrain(player.x, player.r, width - player.r);
-      player.y = constrain(player.y, player.r, height - player.r);
+  if (started && gameOverMessage === "") {
+    // 左右傾きのみ横移動 + 微小揺れ
+    let autoMove = tiltX !== 0 ? tiltX * 2 : random(-0.5, 0.5);
+    currentBlock.x += autoMove;
 
-      // --- 障害物 ---
-      fill(255, 255, 255, 180);
-      noStroke();
-      obstacles.forEach(obs => {
-        rect(obs.x, obs.y, obs.w, obs.h, 10);
-        if (player.x + player.r > obs.x && player.x - player.r < obs.x + obs.w &&
-            player.y + player.r > obs.y && player.y - player.r < obs.y + obs.h) {
-          player.x -= gamma * speed * 2;
-          player.y -= beta * speed * 2;
-        }
-      });
+    // 画面端で止める
+    currentBlock.x = constrain(currentBlock.x, currentBlock.w/2, width - currentBlock.w/2);
 
-      // --- ゴール ---
-      let gradient = drawingContext.createRadialGradient(goal.x, goal.y, 10, goal.x, goal.y, goal.r);
-      gradient.addColorStop(0, "#fff8e1");
-      gradient.addColorStop(1, "#ffd54f");
-      drawingContext.fillStyle = gradient;
-      ellipse(goal.x, goal.y, goal.r*2);
+    // 落下速度は常にbaseFallSpeed
+    currentBlock.y += baseFallSpeed;
 
-      let d = dist(player.x, player.y, goal.x, goal.y);
-      if (d < player.r + goal.r) {
-        score += 1;
-        player.x = 50;
-        player.y = 50;
-        spawnHearts();
-        updateUI();
-      }
+    let targetY = height - (blocks.length + 1) * blockSize.h;
+    if (currentBlock.y >= targetY) {
+      currentBlock.y = targetY;
 
-      // --- ハートアイテム ---
-      for (let i = hearts.length - 1; i >= 0; i--) {
-        let h = hearts[i];
-        fill(255, 105, 180);
-        heartShape(h.x, h.y, 15);
-        let distH = dist(player.x, player.y, h.x, h.y);
-        if (distH < player.r + 10) {
-          hearts.splice(i, 1);
-          score += 3; // ボーナス
-          updateUI();
-        }
-      }
-
-      // --- プレイヤー ---
-      fill(255, 182, 193);
-      noStroke();
-      ellipse(player.x, player.y, player.r*2);
-    }
-
-    // --- タイマー関数 ---
-    function startTimer() {
-      clearInterval(timer);
-      timer = setInterval(() => {
-        if (gameActive) {
-          timeLeft--;
-          if (timeLeft <= 0) {
-            gameActive = false;
-            clearInterval(timer);
-            alert("🌸 ゲーム終了！あなたのスコアは " + score + " です！");
-            document.querySelector("#start").style.display = "block"; // 再挑戦ボタンとして再表示
-          }
-          updateUI();
-        }
-      }, 1000);
-    }
-
-    function spawnHearts() {
-      hearts = [];
-      for (let i = 0; i < 3; i++) {
-        hearts.push({
-          x: random(100, width - 100),
-          y: random(100, height - 100)
-        });
+      let last = blocks[blocks.length - 1];
+      if (abs(currentBlock.x - last.x) > (currentBlock.w + last.w)/2) {
+        gameOver();
+      } else {
+        currentBlock.color = initialBlockColor;
+        blocks.push({ ...currentBlock });
+        score++;
+        newBlock(); // 新しいブロック生成（速度アップ済み）
       }
     }
+  }
 
-    function updateUI() {
-      document.querySelector("#ui").innerText = `スコア: ${score}　｜　残り: ${timeLeft} 秒`;
-    }
+  fill(currentBlock.color);
+  rect(currentBlock.x - currentBlock.w/2, currentBlock.y - blockSize.h, currentBlock.w, blockSize.h);
 
-    // --- ハート形 ---
-    function heartShape(x, y, size) {
-      beginShape();
-      for (let t = 0; t < TWO_PI; t += 0.1) {
-        let sx = 16 * pow(sin(t), 3);
-        let sy = 13 * cos(t) - 5 * cos(2*t) - 2 * cos(3*t) - cos(4*t);
-        vertex(x + sx * size * 0.05, y - sy * size * 0.05);
-      }
-      endShape(CLOSE);
-    }
-  </script>
+  // スコア表示
+  fill(255, 200);
+  rect(width - 160, 10, 150, 60, 12);
+  fill(50);
+  textSize(20);
+  textAlign(RIGHT, TOP);
+  text(`スコア: ${score}`, width - 20, 15);
+  text(`ハイスコア: ${highScore}`, width - 20, 40);
+
+  if (gameOverMessage !== "") {
+    fill(255, 200, 230, 220);
+    rect(0, 0, width, height);
+    fill(255, 100, 150);
+    textAlign(CENTER, CENTER);
+    textSize(32);
+    text(gameOverMessage, width/2, height/2);
+    textSize(20);
+    text("クリックで再スタート", width/2, height/2 + 60);
+  }
+}
+
+function gameOver() {
+  started = false;
+  gameOverMessage = `❌ ズレすぎて崩れました！\n🎮 積み重ねた数：${score} 個`;
+  if (score > highScore) {
+    highScore = score;
+    localStorage.setItem("highScore", highScore);
+  }
+}
+
+function mousePressed() {
+  if (gameOverMessage !== "") {
+    resetGame();
+    started = true;
+  }
+}
+</script>
 </body>
 </html>
