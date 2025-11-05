@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>Tower Game</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.5.0/p5.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.1/socket.io.min.js"></script>
+  <style>
+    body { margin: 0; overflow: hidden; font-family: 'Comic Sans MS', sans-serif; }
+    #ui { position: fixed; top: 10px; left: 10px; display: flex; flex-direction: column; gap: 10px; z-index: 10; }
+    button { padding: 10px 18px; font-size: 16px; cursor: pointer; border-radius: 14px; border: none; background: #ffd3d3; color: #333; box-shadow: 2px 2px 6px rgba(0,0,0,0.2); transition: transform 0.1s, background 0.2s; }
+    button:active { transform: scale(0.95); background: #ff9999; }
+    button:disabled { background: #cc9999; cursor: not-allowed; box-shadow: none; }
+  </style>
+</head>
+<body>
+<div id="ui">
+  <button id="joinBtn">ルームに入る</button>
+  <button id="startBtn" disabled>スタート</button>
+</div>
+
+<script>
+let socket = io.connect();
+let joined = false;
+let started = false;
+
+let tiltX = 0;
+let tiltY = 0;
+
+document.getElementById("joinBtn").onclick = () => {
+  socket.emit("join", "game");
+  joined = true;
+  document.getElementById("joinBtn").disabled = true;
+  document.getElementById("startBtn").disabled = false;
+};
+
+document.getElementById("startBtn").onclick = () => {
+  started = true;
+  tiltX = 0;
+  tiltY = 0;
+  document.getElementById("startBtn").disabled = true;
+};
+
+socket.on("sensor", (data) => {
+  if (started) {
+    tiltX = parseFloat(data.g);
+    tiltY = parseFloat(data.a);
+  } else {
+    tiltX = 0;
+    tiltY = 0;
+  }
+});
+
+let blocks = [];
+let currentBlock;
+let blockSize = { w: 120, h: 25 };
+let baseFallSpeed = 5;
+let score = 0;
+let gameOverMessage = "";
+let highScore = localStorage.getItem("highScore") || 0;
+
+const initialBlockColor = [120, 180, 255];
+const fallingBlockColor = [255, 150, 120];
+
+function setup() {
+  createCanvas(window.innerWidth, window.innerHeight);
+  resetGame();
+}
+
+function resetGame() {
+  tiltX = 0;
+  tiltY = 0;
+  blocks = [];
+  blocks.push({ x: width / 2, y: height - blockSize.h, w: blockSize.w * 1.5, color: initialBlockColor });
+  score = 0;
+  baseFallSpeed = 5;
+  gameOverMessage = "";
+  newBlock();
+}
+
+function newBlock() {
+  let randomWidth = random(60, 200);
+  let minX = width / 2 - width / 4 + randomWidth / 2;
+  let maxX = width / 2 + width / 4 - randomWidth / 2;
+  let randomX = random(minX, maxX);
+  currentBlock = { x: randomX, y: -100, w: randomWidth, color: fallingBlockColor };
+  baseFallSpeed += 1;
+}
+
+function draw() {
+  for (let i = 0; i < height; i++) {
+    let inter = map(i, 0, height, 0, 1);
+    let c = lerpColor(color('#FFF0F5'), color('#FFE4E1'), inter);
+    stroke(c);
+    line(0, i, width, i);
+  }
+
+  noStroke();
+  for (let b of blocks) {
+    fill(b.color);
+    rect(b.x - b.w / 2, b.y - blockSize.h, b.w, blockSize.h);
+  }
+
+  if (started && gameOverMessage === "") {
+    let autoMove = tiltX !== 0 ? tiltX * 2 : random(-0.5, 0.5);
+    currentBlock.x += autoMove;
+    currentBlock.x = constrain(currentBlock.x, currentBlock.w / 2, width - currentBlock.w / 2);
+
+    let deadZone = 2;
+    let tiltEffect = abs(tiltY) > deadZone ? tiltY * 0.15 : 0;
+    let fallSpeed = baseFallSpeed + tiltEffect;
+    fallSpeed = constrain(fallSpeed, 0, 8);
+
+    currentBlock.y += fallSpeed;
+
+    let targetY = height - (blocks.length + 1) * blockSize.h;
+    if (currentBlock.y >= targetY) {
+      currentBlock.y = targetY;
+      let last = blocks[blocks.length - 1];
+      if (abs(currentBlock.x - last.x) > (currentBlock.w + last.w) / 2) {
+        gameOver();
+      } else {
+        currentBlock.color = initialBlockColor;
+        blocks.push({ ...currentBlock });
+        score++;
+        newBlock();
+      }
+    }
+  }
+
+  fill(currentBlock.color);
+  rect(currentBlock.x - currentBlock.w / 2, currentBlock.y - blockSize.h, currentBlock.w, blockSize.h);
+
+  fill(255, 200);
+  rect(width - 160, 10, 150, 60, 12);
+  fill(50);
+  textSize(20);
+  textAlign(RIGHT, TOP);
+  text(`スコア: ${score}`, width - 20, 15);
+  text(`ハイスコア: ${highScore}`, width - 20, 40);
+
+  if (gameOverMessage !== "") {
+    fill(255, 200, 230, 220);
+    rect(0, 0, width, height);
+    fill(255, 100, 150);
+    textAlign(CENTER, CENTER);
+    textSize(32);
+    text(gameOverMessage, width / 2, height / 2);
+    textSize(20);
+    text("クリックで再スタート", width / 2, height / 2 + 60);
+  }
+}
+
+function gameOver() {
+  started = false;
+  gameOverMessage = `❌ ズレすぎて崩れました！\n🎮 積み重ねた数：${score} 個`;
+  if (score > highScore) {
+    highScore = score;
+    localStorage.setItem("highScore", highScore);
+  }
+}
+
+function mousePressed() {
+  if (gameOverMessage !== "") {
+    resetGame();
+    started = true;
+  }
+}
+</script>
+</body>
+</html>
